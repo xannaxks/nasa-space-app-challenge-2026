@@ -1,0 +1,58 @@
+{
+  "grid": {
+    "width": 565,
+    "height": 594,
+    "res_m": 100.0,
+    "crs": "PROJCS[\"MTM_clon77_5E\",GEOGCS[\"GCS_Mars_2000_Sphere\",DATUM[\"Mars_2000_(Sphere)\",SPHEROID[\"Mars_2000_Sphere\",3396190,0],AUTHORITY[\"ESRI\",\"106971\"]],PRIMEM[\"Reference_Meridian\",0],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0],PARAMETER[\"central_meridian\",77.5],PARAMETER[\"scale_factor\",1],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH]]",
+    "transform": [
+      100.0,
+      0.0,
+      -39528.90637077264,
+      0.0,
+      -100.0,
+      1108513.8212198,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "top_left": [
+      -39528.90637077264,
+      1108513.8212198
+    ]
+  },
+  "dtm": {
+    "b18_frac": 0.26074014481094127,
+    "j03_frac": 0.4866392538958911,
+    "mosaic_frac": 0.6321563719793808,
+    "overlap_px": 38670,
+    "j03_b18_median_bias": 6.989013671875,
+    "p2": -2735.44921875,
+    "p98": -1762.894775390625,
+    "mean": -2261.999267578125,
+    "std": 279.5
+  },
+  "day": {
+    "p2": 56.0,
+    "p98": 190.0
+  },
+  "night": {
+    "p2": 16.0,
+    "p98": 212.0
+  },
+  "geounits": {
+    "1": "Aeb",
+    "2": "Hnpf",
+    "3": "NHjf1",
+    "4": "NHjf2",
+    "5": "Njf",
+    "6": "Nle",
+    "7": "Nnp1",
+    "8": "Nnp2",
+    "9": "Nrb",
+    "10": "Nue",
+    "11": "ce",
+    "12": "ci",
+    "13": "cr",
+    "14": "su"
+  }
+}
