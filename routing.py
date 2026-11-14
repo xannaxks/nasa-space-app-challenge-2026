@@ -28,13 +28,17 @@ from __future__ import annotations
 
 import ast
 import heapq
+import logging
 import math
 import operator
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Sequence, Tuple
 
 import numpy as np
+
+logger = logging.getLogger("traverse.routing")
 
 try:
     import rasterio
@@ -798,24 +802,34 @@ def _read_band(path: Path, band: int = 1) -> Tuple[np.ndarray, float, object]:
 
 def load_maps(aligned_dir: str | Path = ALIGNED_DIR) -> RasterMaps:
     """Load and harden the four analysis rasters onto one common grid."""
+    started = time.perf_counter()
     aligned = Path(aligned_dir)
+    logger.info("load_maps: start dir=%s", aligned)
     elev, elev_nodata, res_m = _read_band(aligned / ELEVATION_FILE)
+    logger.info("load_maps: elevation %s res=%.1fm nodata=%s", elev.shape, res_m, elev_nodata)
     day, _, _ = _read_band(aligned / DAY_IR_FILE)
+    logger.info("load_maps: day IR %s", day.shape)
     night, _, _ = _read_band(aligned / NIGHT_IR_FILE)
+    logger.info("load_maps: night IR %s", night.shape)
     geo_raw, _, _ = _read_band(aligned / GEO_FILE)
+    logger.info("load_maps: geology %s", geo_raw.shape)
     if not (elev.shape == day.shape == night.shape == geo_raw.shape):
         raise ValueError("Aligned rasters must share one grid shape")
     valid = np.isfinite(elev)
     if math.isfinite(elev_nodata):
         valid &= elev != elev_nodata
+    n_valid = int(np.count_nonzero(valid))
+    logger.info("load_maps: valid cells %d/%d (%.1f%%)", n_valid, valid.size, 100.0 * n_valid / valid.size)
     elevation = np.where(valid, elev, np.nan)
     day_ir = np.clip(np.where(np.isfinite(day), day, 0.0), 0.0, 1.0)
     night_ir = np.clip(np.where(np.isfinite(night), night, 0.0), 0.0, 1.0)
     geo = np.where(np.isfinite(geo_raw), np.rint(geo_raw), 0).astype(int)
     geo = np.clip(geo, 0, 99)
-    if int(np.count_nonzero(valid)) == 0:
+    if n_valid == 0:
         raise ValueError("Elevation raster has no valid cells")
-    return RasterMaps(elevation=elevation, valid=valid, day_ir=day_ir, night_ir=night_ir, geo=geo, res_m=res_m)
+    maps = RasterMaps(elevation=elevation, valid=valid, day_ir=day_ir, night_ir=night_ir, geo=geo, res_m=res_m)
+    logger.info("load_maps: done grid=%dx%d in %.2fs", maps.height, maps.width, time.perf_counter() - started)
+    return maps
 
 
 @dataclass
@@ -870,7 +884,14 @@ class CostConfig:
 
 def precompute_cell_layers(maps: RasterMaps, config: CostConfig) -> Dict[str, np.ndarray]:
     """Precompute per-cell roughness / obstacle / geology / IR / thermal."""
+    started = time.perf_counter()
     config.validate()
+    logger.info(
+        "precompute: start grid=%dx%d roughness=%s(r=%d,detrend=%s) obstacles=%s(r=%d)",
+        maps.height, maps.width,
+        config.roughness_method, config.roughness_radius, config.roughness_detrend,
+        config.obstacle_method, config.obstacle_radius,
+    )
     height, width = maps.height, maps.width
     roughness = np.zeros((height, width), dtype=float)
     obstacles = np.zeros((height, width), dtype=float)
@@ -905,6 +926,13 @@ def precompute_cell_layers(maps: RasterMaps, config: CostConfig) -> Dict[str, np
                 )
             except ValueError:
                 obstacles[row, col] = 0.0
+        if height >= 100 and (row + 1) % 100 == 0:
+            logger.info("precompute: row %d/%d", row + 1, height)
+    logger.info(
+        "precompute: raw stats rough_mean=%.3fm rough_max=%.3fm obst_mean=%.4f obst_max=%.3f",
+        float(roughness[maps.valid].mean() if np.any(maps.valid) else 0.0),
+        float(roughness.max()), float(obstacles.mean()), float(obstacles.max()),
+    )
     roughness = np.clip(np.nan_to_num(roughness, nan=0.0, posinf=50.0), 0.0, 50.0)
     obstacles = np.clip(np.nan_to_num(obstacles, nan=0.0), 0.0, 1.0)
     geology = np.vectorize(
@@ -930,6 +958,7 @@ def precompute_cell_layers(maps: RasterMaps, config: CostConfig) -> Dict[str, np
             [thermal_swing_risk_penalty_func(abs(v)) for v in ir_diff.ravel()], 0.0, 10.0
         ).reshape(height, width),
     }
+    logger.info("precompute: done in %.2fs", time.perf_counter() - started)
     return layers
 
 
@@ -1255,6 +1284,12 @@ def dijkstra(
             raise ValueError("max_expansions must be a positive int")
 
     height, width = maps.height, maps.width
+    n_sources = len(clean_sources)
+    logger.info(
+        "dijkstra: start sources=%d target=%s max_expansions=%s grid=%dx%d",
+        n_sources, target, max_expansions, height, width,
+    )
+    started = time.perf_counter()
     distance = np.full((height, width), INF, dtype=float)
     parent = np.full((height, width), -1, dtype=np.int8)
     state = np.empty((height, width), dtype=object)
@@ -1268,6 +1303,7 @@ def dijkstra(
 
     expansions = 0
     reached = target is None
+    vertex_trace = logger.isEnabledFor(logging.DEBUG)
     while heap:
         cost, row, col, path_state = heapq.heappop(heap)
         if settled[row, col]:
@@ -1275,8 +1311,17 @@ def dijkstra(
         settled[row, col] = True
         state[row, col] = path_state
         expansions += 1
+        if vertex_trace:
+            logger.debug("dijkstra: settle #%d cell=(%d,%d) cost=%.2f dir=%d run=%.0fm heap=%d",
+                         expansions, row, col, cost, path_state.direction,
+                         path_state.run_distance, len(heap))
+        elif expansions == 1 or expansions % 50000 == 0:
+            logger.info("dijkstra: settled=%d heap=%d current=(%d,%d) cost=%.1f",
+                        expansions, len(heap), row, col, cost)
         if target is not None and (row, col) == target:
             reached = True
+            logger.info("dijkstra: target %s reached cost=%.2f after %d expansions (%.2fs)",
+                        target, cost, expansions, time.perf_counter() - started)
             break
         if max_expansions is not None and expansions >= max_expansions:
             break
@@ -1296,6 +1341,8 @@ def dijkstra(
                 distance[nrow, ncol] = alt
                 parent[nrow, ncol] = direction
                 heapq.heappush(heap, (alt, nrow, ncol, new_state))
+    logger.info("dijkstra: done settled=%d reached=%s target=%s elapsed=%.2fs",
+                expansions, reached, target, time.perf_counter() - started)
     return DijkstraResult(distance=distance, parent=parent, state=state, reached=reached, target=target)
 
 
@@ -1309,6 +1356,7 @@ def reconstruct_path(result: DijkstraResult, target: Tuple[int, int]) -> List[Tu
         raise IndexError("Target is outside the raster")
     if not math.isfinite(result.distance[row, col]):
         raise ValueError("Target is unreachable")
+    logger.info("reconstruct: start target=(%d,%d) cost=%.2f", row, col, float(result.distance[row, col]))
     # Step index d means: current cell was reached FROM (row - TI[d], col - TJ[d]).
     path = [(row, col)]
     guard = height * width + 1
@@ -1323,6 +1371,8 @@ def reconstruct_path(result: DijkstraResult, target: Tuple[int, int]) -> List[Tu
         if len(path) > guard:
             raise ValueError("Parent chain contains a cycle")
     path.reverse()
+    logger.info("reconstruct: done %d cells from (%d,%d) to (%d,%d)",
+                len(path), path[0][0], path[0][1], path[-1][0], path[-1][1])
     return path
 
 
