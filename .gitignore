@@ -6,3 +6,4 @@ MSR_TRN_HiRISE_soc_003_USGS_release_aug2024/
 *.xml
 terrain-map/
 __pycache__/
+__pycache__
