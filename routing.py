@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import heapq
+import json
 import logging
 import math
 import operator
@@ -241,12 +242,55 @@ terrain_type_IR_based_penalty_func = compile_expression(
     terrain_type_IR_based_penalty_expr
 )
 
-#: Per-geology-unit penalty multipliers. Intentionally empty: fill with
-#: the 1..14 codes from ``aligned/geounit_lookup.json`` when mission
-#: scientists rank units, e.g. ``{1: 0.2, 14: 1.5, ...}``.
-#: Unknown codes fall back to ``DEFAULT_GEOLOGY_PENALTY``.
-terrain_type_geological_based_dict: Dict[int, float] = {}
+#: Human-readable GeoUnits names for codes 1..14 (code 0 = background).
+#: Shown in API docs so users understand which unit they penalise.
+GEOLOGY_UNIT_NAMES: Dict[int, str] = {
+    1: "1 - Eolian bedform unit",
+    2: "2 - Nili planum fan unit",
+    3: "3 - Jezero fan 1 unit",
+    4: "4 - Jezero fan 2 unit",
+    5: "5 - Jezero floor unit",
+    6: "6 - Lower etched unit",
+    7: "7 - Nili planum 1 unit",
+    8: "8 - Nili planum 2 unit",
+    9: "9 - Rugged bright unit",
+    10: "10 - Upper etched unit",
+    11: "11 - Crater ejecta unit",
+    12: "12 - Crater interior unit",
+    13: "13 - Crater rim unit",
+    14: "14 - Smooth unit",
+}
+#: Reasonable default per-unit penalties (dimensionless, 0..10, direct
+#: lookup - no math curve). Smooth / fan / floor units are cheap;
+#: eolian bedforms, rugged bright, crater rims/interiors are expensive.
+DEFAULT_GEOLOGY_PENALTIES: Dict[int, float] = {
+    1: 1.5,
+    2: 0.5,
+    3: 0.4,
+    4: 0.4,
+    5: 0.3,
+    6: 0.8,
+    7: 0.6,
+    8: 0.6,
+    9: 1.2,
+    10: 0.9,
+    11: 1.0,
+    12: 1.3,
+    13: 1.6,
+    14: 0.2,
+}
+#: Per-geology-unit penalty coefficients (direct lookup, no math curve).
+#: Pre-filled with ``DEFAULT_GEOLOGY_PENALTIES``; per-request overrides
+#: swap this global (see api._cell_layers / post_route). Unknown codes
+#: (e.g. 0 = background) fall back to ``DEFAULT_GEOLOGY_PENALTY``.
+terrain_type_geological_based_dict: Dict[int, float] = dict(DEFAULT_GEOLOGY_PENALTIES)
 DEFAULT_GEOLOGY_PENALTY = 0.5
+#: Which map defines the "terrain type" penalty: IR day-night swing
+#: (default, recommended), geological units, or both at once (allowed
+#: but NOT recommended - the two signals overlap, so mixing
+#: double-counts terrain texture; prefer exactly one of them).
+_VALID_TERRAIN_SOURCES = ("geological_units", "ir_swing", "both")
+DEFAULT_TERRAIN_SOURCE = "ir_swing"
 
 # Dimensionless weights balancing the local penalty terms, and the
 # incremental continuous-climb term. Slope dominates; obstacles and
@@ -771,6 +815,9 @@ ELEVATION_FILE = "DTM_CTX_mosaic_MTM100m.tif"
 DAY_IR_FILE = "THEMIS_Day_MTM100m_norm01.tif"
 NIGHT_IR_FILE = "THEMIS_Night_MTM100m_norm01.tif"
 GEO_FILE = "GeoUnits_MTM100m.tif"
+GEOLOGY_VECTOR_FILE = "GeoUnits_vector_MTM100m.geojson"
+GEOLOGY_VECTOR_SIMPLIFIED_FILE = "GeoUnits_vector_MTM100m_simplified.geojson"
+GEOLOGY_VECTOR_STATS_FILE = "GeoUnits_vector_MTM100m_stats.json"
 
 
 @dataclass
@@ -844,6 +891,16 @@ class CostConfig:
     w_terrain_geology: float = W_TERRAIN_GEOLOGY
     w_terrain_ir: float = W_TERRAIN_IR
     w_thermal: float = W_THERMAL
+    #: Which map defines the terrain-type penalty: "ir_swing" (default,
+    #: recommended), "geological_units", or "both" (allowed but NOT
+    #: recommended - the signals overlap, so mixing double-counts terrain
+    #: texture; the "both" weight is halved per branch to compensate).
+    terrain_source: str = DEFAULT_TERRAIN_SOURCE
+    #: Per-unit geology penalty coefficients for codes 1..14 (direct lookup,
+    #: no math curve). ``None`` = use the global default table.
+    geology_penalties: Dict[int, float] | None = None
+    #: Fallback penalty for unknown codes (e.g. 0 = background).
+    geology_default_penalty: float = DEFAULT_GEOLOGY_PENALTY
     elevation_direction_threshold: float = ELEVATION_DIRECTION_THRESHOLD
     # Roughness options.
     roughness_method: str = ROUGHNESS_DEFAULTS["method"]
@@ -868,6 +925,37 @@ class CostConfig:
         _validate_threshold("residual_threshold_m", self.residual_threshold_m, 0.05, 100.0)
         _validate_threshold("slope_threshold_deg", self.slope_threshold_deg, 0.5, 60.0)
         _validate_threshold("tri_threshold_m", self.tri_threshold_m, 0.05, 100.0)
+        # Terrain-type source + per-unit geology penalties.
+        if not isinstance(self.terrain_source, str):
+            raise TypeError("terrain_source must be a string")
+        self.terrain_source = self.terrain_source.strip().lower().replace("-", "_").replace(" ", "_")
+        if self.terrain_source not in _VALID_TERRAIN_SOURCES:
+            raise ValueError(f"terrain_source must be one of {list(_VALID_TERRAIN_SOURCES)}")
+        if self.geology_penalties is None:
+            self.geology_penalties = dict(DEFAULT_GEOLOGY_PENALTIES)
+        if not isinstance(self.geology_penalties, dict):
+            raise TypeError("geology_penalties must be a dict of code -> penalty")
+        checked: Dict[int, float] = {}
+        for code, penalty in self.geology_penalties.items():
+            try:
+                key = int(code)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"invalid geology code {code!r}") from exc
+            if not 1 <= key <= 14:
+                raise ValueError(f"geology code out of range (must be 1..14): {code!r}")
+            if isinstance(penalty, bool) or not isinstance(penalty, (int, float)):
+                raise ValueError(f"geology[{key}] penalty must be a number")
+            penalty = float(penalty)
+            if not math.isfinite(penalty) or not 0.0 <= penalty <= 10.0:
+                raise ValueError(f"geology[{key}] penalty must be within [0, 10]")
+            checked[key] = penalty
+        missing = [c for c in range(1, 15) if c not in checked]
+        if missing:
+            raise ValueError(f"geology_penalties missing codes {missing} (need all 1..14)")
+        self.geology_penalties = checked
+        self.geology_default_penalty = _validate_threshold(
+            "geology_default_penalty", self.geology_default_penalty, 0.0, 10.0
+        )
         for name in (
             "w_elevation", "w_continuous_elevation", "w_roughness", "w_obstacles",
             "w_terrain_geology", "w_terrain_ir", "w_thermal",
@@ -935,11 +1023,15 @@ def precompute_cell_layers(maps: RasterMaps, config: CostConfig) -> Dict[str, np
     )
     roughness = np.clip(np.nan_to_num(roughness, nan=0.0, posinf=50.0), 0.0, 50.0)
     obstacles = np.clip(np.nan_to_num(obstacles, nan=0.0), 0.0, 1.0)
+    # Per-unit geology lookup from the config (direct coefficients, no math
+    # curve); unknown codes (0 = background) use the default penalty.
+    penalties = config.geology_penalties or dict(DEFAULT_GEOLOGY_PENALTIES)
+    fallback = float(config.geology_default_penalty)
     geology = np.vectorize(
-        lambda code: float(terrain_type_geological_based_dict.get(int(code), DEFAULT_GEOLOGY_PENALTY)),
+        lambda code: float(penalties.get(int(code), fallback)),
         otypes=[float],
     )(maps.geo)
-    geology = np.clip(np.nan_to_num(geology, nan=DEFAULT_GEOLOGY_PENALTY), 0.0, 10.0)
+    geology = np.clip(np.nan_to_num(geology, nan=fallback), 0.0, 10.0)
     ir_diff = np.clip(maps.day_ir - maps.night_ir, -1.0, 1.0)
     layers = {
         "roughness_m": roughness,
@@ -960,6 +1052,172 @@ def precompute_cell_layers(maps: RasterMaps, config: CostConfig) -> Dict[str, np
     }
     logger.info("precompute: done in %.2fs", time.perf_counter() - started)
     return layers
+
+
+# ---------------------------------------------------------------------------
+# Aligned geology vector map (GeoJSON, served to the frontend)
+# ---------------------------------------------------------------------------
+# ``aligned/GeoUnits_vector_MTM100m.geojson`` is the aggregated GeoUnits_v1
+# export: 1304 MultiPolygon features, ALL native GDB columns preserved
+# (unit, name, symbol_noSub, subscript, symbol, ORIG_FID, SHAPE_Length,
+# SHAPE_Area, Color_ID) plus ``_layer`` ("GeoUnits_v1") and ``_code``
+# (1..14, matching GeoUnits_MTM100m.tif raster codes).
+#
+# NOTE: coordinates are MTM metres (same grid as the aligned rasters), NOT
+# lon/lat. GeoJSON has no MTM CRS code, so the file carries no "crs"
+# member -- readers must NOT assume the GeoJSON default (EPSG:4326).
+
+#: Strict per-feature property schema of the exported vector map.
+GEOLOGY_VECTOR_PROPERTIES = (
+    "unit",
+    "name",
+    "symbol_noSub",
+    "subscript",
+    "symbol",
+    "ORIG_FID",
+    "SHAPE_Length",
+    "SHAPE_Area",
+    "Color_ID",
+    "_layer",
+    "_code",
+)
+
+#: Max GeoJSON bytes served in one response (full file = ~70 MB).
+GEOLOGY_VECTOR_MAX_BYTES = 90_000_000
+#: Max features per response (file holds 1304).
+GEOLOGY_VECTOR_MAX_FEATURES = 5000
+
+
+def _check_geology_vector_path(
+    aligned_dir: str | Path, filename: str
+) -> Path:
+    """Resolve + validate a geology-vector file inside ``aligned_dir``."""
+    if not isinstance(filename, str) or not filename.strip():
+        raise TypeError("filename must be a non-empty string")
+    allowed = (GEOLOGY_VECTOR_FILE, GEOLOGY_VECTOR_SIMPLIFIED_FILE)
+    if filename not in allowed:
+        raise ValueError(f"unknown geology vector file {filename!r}. Valid: {list(allowed)}")
+    aligned = Path(aligned_dir)
+    path = (aligned / filename).resolve()
+    if path.parent != aligned.resolve():
+        raise ValueError("path escapes the aligned directory")
+    if not path.is_file():
+        raise FileNotFoundError(f"geology vector map not found: {path.name}")
+    if path.stat().st_size > GEOLOGY_VECTOR_MAX_BYTES:
+        raise ValueError(f"geology vector map exceeds {GEOLOGY_VECTOR_MAX_BYTES} bytes")
+    return path
+
+
+def load_geology_vector_stats(
+    aligned_dir: str | Path = ALIGNED_DIR,
+) -> Dict[str, object]:
+    """Read the export sidecar (counts, bounds, legend data for the UI)."""
+    path = Path(aligned_dir) / GEOLOGY_VECTOR_STATS_FILE
+    if not path.is_file():
+        raise FileNotFoundError(f"geology vector stats not found: {path.name}")
+    try:
+        stats = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot parse {path.name}: {exc}") from exc
+    if not isinstance(stats, dict):
+        raise ValueError(f"{path.name} must hold a JSON object")
+    return stats
+
+
+def load_geology_vector_geojson(
+    aligned_dir: str | Path = ALIGNED_DIR,
+    simplified: bool = True,
+    code: int | None = None,
+    bbox: Sequence[float] | None = None,
+    limit: int | None = None,
+) -> Dict[str, object]:
+    """Load the aggregated geology vector map as a GeoJSON dict.
+
+    Args:
+        aligned_dir: directory holding the exported ``*.geojson`` files.
+        simplified: ``True`` (default) serves the 25 m-simplified variant
+            (~3.4 MB, same 1304 features/columns); ``False`` serves the
+            full-resolution file (~70 MB).
+        code: optional GeoUnits ``_code`` 1..14 to keep (one-unit overlay).
+        bbox: optional ``(minx, miny, maxx, maxy)`` in MTM metres; keeps
+            only features whose bbox intersects the window (viewport culling).
+        limit: optional cap on returned features (1..5000).
+
+    Coordinates stay MTM metres (NOT lon/lat) -- see note above.
+    """
+    filename = GEOLOGY_VECTOR_SIMPLIFIED_FILE if simplified else GEOLOGY_VECTOR_FILE
+    path = _check_geology_vector_path(aligned_dir, filename)
+    if code is not None:
+        if isinstance(code, bool) or not isinstance(code, int) or not 1 <= code <= 14:
+            raise ValueError("code must be an int within [1, 14]")
+    if limit is not None:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= GEOLOGY_VECTOR_MAX_FEATURES:
+            raise ValueError(f"limit must be within [1, {GEOLOGY_VECTOR_MAX_FEATURES}]")
+    window: Tuple[float, float, float, float] | None = None
+    if bbox is not None:
+        try:
+            window = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        except (TypeError, ValueError, IndexError) as exc:
+            raise ValueError("bbox must be (minx, miny, maxx, maxy) numbers") from exc
+        if not all(math.isfinite(v) for v in window):
+            raise ValueError("bbox values must be finite")
+        if not (window[0] < window[2] and window[1] < window[3]):
+            raise ValueError("bbox must satisfy minx<maxx and miny<maxy")
+    started = time.perf_counter()
+    logger.info("geology_vector: load file=%s code=%s bbox=%s limit=%s", filename, code, window, limit)
+    try:
+        geojson = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot parse {path.name}: {exc}") from exc
+    if not isinstance(geojson, dict) or geojson.get("type") != "FeatureCollection":
+        raise ValueError(f"{path.name} is not a GeoJSON FeatureCollection")
+    features = geojson.get("features")
+    if not isinstance(features, list):
+        raise ValueError(f"{path.name} has no features list")
+    logger.info("geology_vector: %d features on disk", len(features))
+
+    def _feature_bbox(feature: Dict[str, object]) -> Tuple[float, float, float, float] | None:
+        try:
+            coords = feature["geometry"]["coordinates"]  # type: ignore[index]
+        except (KeyError, TypeError):
+            return None
+        xs: List[float] = []
+        ys: List[float] = []
+        stack: List[object] = [coords]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, (list, tuple)):
+                if item and all(isinstance(v, (int, float)) for v in item):
+                    if len(item) >= 2:
+                        xs.append(float(item[0]))
+                        ys.append(float(item[1]))
+                else:
+                    stack.extend(item)
+        if not xs:
+            return None
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    kept: List[Dict[str, object]] = []
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        props = feature.get("properties")
+        if not isinstance(props, dict):
+            continue
+        if code is not None and int(props.get("_code", -1)) != code:
+            continue
+        if window is not None:
+            fb = _feature_bbox(feature)
+            if fb is None or fb[2] < window[0] or fb[0] > window[2] or fb[3] < window[1] or fb[1] > window[3]:
+                continue
+        kept.append(feature)
+        if limit is not None and len(kept) >= limit:
+            break
+    logger.info(
+        "geology_vector: serving %d/%d features (%.1f MB on disk, %.2fs)",
+        len(kept), len(features), path.stat().st_size / 1e6, time.perf_counter() - started,
+    )
+    return {"type": "FeatureCollection", "name": "GeoUnits_v1", "features": kept}
 
 
 # ---------------------------------------------------------------------------
@@ -1140,12 +1398,22 @@ def get_obstacle_density_cost(layers: Dict[str, np.ndarray], cell: Tuple[int, in
     return value
 
 
-def get_terrain_type_geological_based_cost(maps: RasterMaps, cell: Tuple[int, int]) -> float:
-    """Geology-unit penalty, falling back to the default for unknown codes."""
+def get_terrain_type_geological_based_cost(
+    maps: RasterMaps,
+    cell: Tuple[int, int],
+    penalties: Dict[int, float] | None = None,
+    default_penalty: float = DEFAULT_GEOLOGY_PENALTY,
+) -> float:
+    """Geology-unit penalty: direct coefficient lookup, no math curve.
+
+    ``penalties`` maps codes 1..14 to scores; unknown codes fall back to
+    ``default_penalty``. ``None`` uses the global default table.
+    """
     row, col = _check_cell(maps, cell, "cell")
+    table = terrain_type_geological_based_dict if penalties is None else penalties
     code = int(maps.geo[row, col])
     try:
-        value = float(terrain_type_geological_based_dict.get(code, DEFAULT_GEOLOGY_PENALTY))
+        value = float(table.get(code, default_penalty))
     except (TypeError, ValueError) as exc:
         raise ValueError("Geology penalty lookup failed") from exc
     if not math.isfinite(value) or value < 0.0 or value > 10.0:
@@ -1200,8 +1468,30 @@ def calc_cost(
     row, col = int(to_cell[0]), int(to_cell[1])
     roughness_cost = get_roughness_cost(layers, (row, col))
     obstacle_density_cost = get_obstacle_density_cost(layers, (row, col))
-    terrain_geology_cost = get_terrain_type_geological_based_cost(maps, (row, col))
-    terrain_ir_cost = get_terrain_type_IR_based_cost(maps, (row, col))
+    # Terrain-type penalty: chosen map source. "both" keeps both branches
+    # but halves each weight so the two overlapping texture signals do not
+    # double-count (still NOT recommended - prefer exactly one source).
+    terrain_source = getattr(config, "terrain_source", DEFAULT_TERRAIN_SOURCE)
+    if terrain_source == "geological_units":
+        terrain_geology_cost = get_terrain_type_geological_based_cost(
+            maps, (row, col),
+            penalties=config.geology_penalties,
+            default_penalty=config.geology_default_penalty,
+        )
+        terrain_ir_cost = 0.0
+        w_geo, w_ir = config.w_terrain_geology, 0.0
+    elif terrain_source == "ir_swing":
+        terrain_geology_cost = 0.0
+        terrain_ir_cost = get_terrain_type_IR_based_cost(maps, (row, col))
+        w_geo, w_ir = 0.0, config.w_terrain_ir
+    else:  # "both"
+        terrain_geology_cost = get_terrain_type_geological_based_cost(
+            maps, (row, col),
+            penalties=config.geology_penalties,
+            default_penalty=config.geology_default_penalty,
+        )
+        terrain_ir_cost = get_terrain_type_IR_based_cost(maps, (row, col))
+        w_geo, w_ir = config.w_terrain_geology * 0.5, config.w_terrain_ir * 0.5
     thermal_swing_cost = get_thermal_swing_risk_cost(maps, (row, col))
 
     for name, value in (
@@ -1219,8 +1509,8 @@ def calc_cost(
     local_penalties = (
         config.w_elevation * elevation_cost
         + config.w_roughness * roughness_cost
-        + config.w_terrain_geology * terrain_geology_cost
-        + config.w_terrain_ir * terrain_ir_cost
+        + w_geo * terrain_geology_cost
+        + w_ir * terrain_ir_cost
         + config.w_thermal * thermal_swing_cost
         + config.w_obstacles * obstacle_density_cost
     )
@@ -1420,12 +1710,23 @@ __all__ = [
     "CELL_RES_M",
     "CostConfig",
     "DEFAULT_CONFIG",
+    "DEFAULT_GEOLOGY_PENALTIES",
     "DEFAULT_GEOLOGY_PENALTY",
+    "DEFAULT_TERRAIN_SOURCE",
     "DijkstraResult",
     "ELEVATION_DIRECTION_THRESHOLD",
     "EdgeInfo",
+    "GEOLOGY_UNIT_NAMES",
+    "GEOLOGY_VECTOR_SIMPLIFIED_FILE",
+    "GEOLOGY_VECTOR_STATS_FILE",
+    "GEOLOGY_VECTOR_FILE",
+    "GEOLOGY_VECTOR_MAX_BYTES",
+    "GEOLOGY_VECTOR_MAX_FEATURES",
+    "GEOLOGY_VECTOR_PROPERTIES",
     "INF",
     "IMPASSABLE_COST",
+    "load_geology_vector_geojson",
+    "load_geology_vector_stats",
     "OBSTACLE_DEFAULTS",
     "ROUGHNESS_DEFAULTS",
     "RasterMaps",

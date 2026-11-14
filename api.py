@@ -255,12 +255,47 @@ class PenaltyExpressions(BaseModel):
         return v
 
 
+class TerrainSource(str, Enum):
+    """Which map defines the terrain-type penalty.
+
+    ``ir_swing`` (default, recommended): day-night IR difference texture.
+    ``geological_units``: per-unit penalty coefficients from the GeoUnits map.
+    ``both``: allowed but NOT recommended - the two texture signals overlap,
+    so mixing double-counts terrain (each branch weight is halved).
+    """
+
+    ir_swing = "ir_swing"
+    geological_units = "geological_units"
+    both = "both"
+
+
 class GeologyPenalties(BaseModel):
-    """Per-unit geology multipliers keyed by GeoUnits code ``'1'..'14'``."""
+    """Per-unit geology penalties keyed by GeoUnits code ``1..14``.
 
-    model_config = ConfigDict(extra="forbid")
+    Direct coefficient lookup (no math curve, unlike the other penalties):
+    each unit maps to a score in [0, 10]; unknown codes (0 = background)
+    use ``default_penalty``. Only applied when ``terrain_source`` includes
+    geological units; with the default ``ir_swing`` source these are stored
+    but ignored.
 
-    penalties: Dict[str, float] = Field(default_factory=dict)
+    Units: 1 - Eolian bedform unit, 2 - Nili planum fan unit,
+    3 - Jezero fan 1 unit, 4 - Jezero fan 2 unit, 5 - Jezero floor unit,
+    6 - Lower etched unit, 7 - Nili planum 1 unit, 8 - Nili planum 2 unit,
+    9 - Rugged bright unit, 10 - Upper etched unit, 11 - Crater ejecta unit,
+    12 - Crater interior unit, 13 - Crater rim unit, 14 - Smooth unit.
+    """
+
+    model_config = ConfigDict(extra="forbid", use_enum_values=False)
+
+    penalties: Dict[str, float] = Field(
+        default_factory=lambda: {str(k): float(v) for k, v in R.DEFAULT_GEOLOGY_PENALTIES.items()},
+        description="Per-unit penalty coefficients for GeoUnits codes 1..14 "
+        "(1 - Eolian bedform, 2 - Nili planum fan, 3 - Jezero fan 1, "
+        "4 - Jezero fan 2, 5 - Jezero floor, 6 - Lower etched, "
+        "7 - Nili planum 1, 8 - Nili planum 2, 9 - Rugged bright, "
+        "10 - Upper etched, 11 - Crater ejecta, 12 - Crater interior, "
+        "13 - Crater rim, 14 - Smooth). Direct lookup, no math curve.",
+    )
     default_penalty: float = Field(default=R.DEFAULT_GEOLOGY_PENALTY, ge=0.0, le=10.0)
 
     @field_validator("penalties")
@@ -268,15 +303,19 @@ class GeologyPenalties(BaseModel):
     def _check_codes(cls, v: Dict[str, float]) -> Dict[str, float]:
         if len(v) > 64:
             raise ValueError("at most 64 geology codes")
+        checked: Dict[str, float] = {}
         for code, penalty in v.items():
             try:
                 key = int(str(code).strip())
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"invalid geology code {code!r}") from exc
-            if not 0 <= key <= 999:
-                raise ValueError(f"geology code out of range: {code!r}")
-            _finite_nonneg(f"geology[{code}]", penalty, 0.0, 10.0)
-        return {str(int(str(k).strip())): float(p) for k, p in v.items()}
+            if not 1 <= key <= 14:
+                raise ValueError(f"geology code out of range (must be 1..14): {code!r}")
+            checked[str(key)] = _finite_nonneg(f"geology[{key}]", penalty, 0.0, 10.0)
+        missing = [str(c) for c in range(1, 15) if str(c) not in checked]
+        if missing:
+            raise ValueError(f"geology penalties missing codes {missing} (need all 1..14)")
+        return checked
 
 
 class CellRef(BaseModel):
@@ -297,12 +336,22 @@ class RouteRequest(BaseModel):
     omitted. The response chains Dijkstra legs between consecutive
     waypoints in input order (first->second->...->last) and aggregates
     them into one route.
+
+    Terrain type: pick exactly ONE of ``ir_swing`` (default, recommended)
+    or ``geological_units`` via ``terrain_source``. ``both`` is allowed but
+    NOT recommended (overlapping texture signals double-count terrain).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     waypoints: List[CellRef] = Field(min_length=2, max_length=MAX_WAYPOINTS)
     weights: WeightsModel = Field(default_factory=WeightsModel)
+    terrain_source: TerrainSource = Field(
+        default=TerrainSource.ir_swing,
+        description="Which map defines the terrain-type penalty: 'ir_swing' "
+        "(default, recommended), 'geological_units' (per-unit coefficients), "
+        "or 'both' (allowed but NOT recommended - signals overlap).",
+    )
     elevation_direction_threshold: float = Field(default=R.ELEVATION_DIRECTION_THRESHOLD, ge=0.0, le=50.0)
     roughness: RoughnessParams = Field(default_factory=RoughnessParams)
     obstacles: ObstacleParams = Field(default_factory=ObstacleParams)
@@ -373,6 +422,7 @@ class CellCostResponse(BaseModel):
     roughness_cost: Optional[float] = None
     obstacle_cost: Optional[float] = None
     geology_cost: Optional[float] = None
+    geology_unit: Optional[str] = None
     terrain_ir_cost: Optional[float] = None
     thermal_cost: Optional[float] = None
     config_hash: str
@@ -384,6 +434,8 @@ class DefaultsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     weights: WeightsModel
+    terrain_source: TerrainSource
+    terrain_sources: List[str]
     elevation_direction_threshold: float
     roughness: RoughnessParams
     obstacles: ObstacleParams
@@ -391,6 +443,8 @@ class DefaultsResponse(BaseModel):
     roughness_methods: List[str]
     obstacle_methods: List[str]
     neighborhood_radius_range: List[int]
+    geology_penalties: Dict[str, float]
+    geology_unit_names: Dict[str, str]
     geology_codes: Dict[str, str]
 
 limiter = Limiter(key_func=get_remote_address, storage_uri="memory://")
@@ -488,6 +542,9 @@ def _request_to_cost_config(req: RouteRequest) -> R.CostConfig:
         w_terrain_geology=req.weights.w_terrain_geology,
         w_terrain_ir=req.weights.w_terrain_ir,
         w_thermal=req.weights.w_thermal,
+        terrain_source=_method_str(req.terrain_source),
+        geology_penalties={int(k): float(v) for k, v in req.geology.penalties.items()},
+        geology_default_penalty=req.geology.default_penalty,
         elevation_direction_threshold=req.elevation_direction_threshold,
         roughness_method=_method_str(req.roughness.method),
         roughness_radius=req.roughness.neighborhood_radius,
@@ -565,6 +622,8 @@ def get_defaults(request: Request) -> DefaultsResponse:
         codes = {}
     return DefaultsResponse(
         weights=WeightsModel(),
+        terrain_source=TerrainSource.ir_swing,
+        terrain_sources=list(R._VALID_TERRAIN_SOURCES),
         elevation_direction_threshold=R.ELEVATION_DIRECTION_THRESHOLD,
         roughness=RoughnessParams(),
         obstacles=ObstacleParams(),
@@ -583,6 +642,8 @@ def get_defaults(request: Request) -> DefaultsResponse:
         roughness_methods=list(R._VALID_ROUGHNESS_METHODS),
         obstacle_methods=list(R._VALID_OBSTACLE_METHODS),
         neighborhood_radius_range=[R.MIN_NEIGHBORHOOD_RADIUS, R.MAX_NEIGHBORHOOD_RADIUS],
+        geology_penalties={str(k): float(v) for k, v in R.DEFAULT_GEOLOGY_PENALTIES.items()},
+        geology_unit_names={str(k): v for k, v in R.GEOLOGY_UNIT_NAMES.items()},
         geology_codes={str(k): str(v) for k, v in codes.items()},
     )
 
@@ -607,10 +668,20 @@ def validate_request(request: Request, req: RouteRequest) -> Dict[str, object]:
             logger.warning("validate: waypoint rejected")
             problems.append(f"waypoint {idx} ({cell.row}, {cell.col}) is nodata (impassable)")
     logger.info("validate: valid=%s problems=%d hash=%s", not problems, len(problems), _config_fingerprint(req))
+    if _method_str(req.terrain_source) == "both":
+        problems_note = (
+            "terrain_source='both' mixes IR-swing and geological-units terrain "
+            "penalties; NOT recommended (overlapping signals double-count terrain). "
+            "Prefer exactly one of 'ir_swing' or 'geological_units'."
+        )
+    else:
+        problems_note = ""
     return {
         "valid": not problems,
         "problems": problems,
         "num_waypoints": len(req.waypoints),
+        "terrain_source": _method_str(req.terrain_source),
+        "terrain_warning": problems_note,
         "config_hash": _config_fingerprint(req),
         "cost_config": cfg.__dict__,
     }
@@ -633,11 +704,28 @@ def post_route(request: Request, req: RouteRequest) -> RouteResponse:
     warnings: List[str] = []
     try:
         cfg = _request_to_cost_config(req)
-        logger.info("route: params hash=%s rough=%s obst=%s", _config_fingerprint(req),
-                    _method_str(req.roughness.method), _method_str(req.obstacles.method))
+        logger.info("route: params hash=%s rough=%s obst=%s terrain=%s", _config_fingerprint(req),
+                    _method_str(req.roughness.method), _method_str(req.obstacles.method),
+                    _method_str(req.terrain_source))
     except (TypeError, ValueError) as exc:
         logger.warning("route: invalid parameters: %s", exc)
         raise HTTPException(status_code=422, detail=f"invalid parameters: {exc}") from exc
+    if _method_str(req.terrain_source) == "both":
+        warnings.append(
+            "terrain_source='both' mixes IR-swing and geological-units terrain "
+            "penalties; NOT recommended (overlapping signals double-count terrain "
+            "texture - each branch weight is halved). Prefer exactly one of "
+            "'ir_swing' (recommended) or 'geological_units'."
+        )
+    elif _method_str(req.terrain_source) == "geological_units":
+        warnings.append(
+            "terrain_source='geological_units': using per-unit penalty coefficients "
+            "(1 - Eolian bedform, 2 - Nili planum fan, 3 - Jezero fan 1, "
+            "4 - Jezero fan 2, 5 - Jezero floor, 6 - Lower etched, "
+            "7 - Nili planum 1, 8 - Nili planum 2, 9 - Rugged bright, "
+            "10 - Upper etched, 11 - Crater ejecta, 12 - Crater interior, "
+            "13 - Crater rim, 14 - Smooth)."
+        )
     points = [c.as_tuple() for c in req.waypoints]
     for idx, (row, col) in enumerate(points):
         _r, _c = int(row), int(col)
@@ -742,10 +830,12 @@ def get_cell(
     roughness_radius: int = Query(default=1, ge=R.MIN_NEIGHBORHOOD_RADIUS, le=R.MAX_NEIGHBORHOOD_RADIUS),
     obstacle_radius: int = Query(default=1, ge=R.MIN_NEIGHBORHOOD_RADIUS, le=R.MAX_NEIGHBORHOOD_RADIUS),
     residual_threshold_m: float = Query(default=3.0, ge=0.05, le=100.0),
+    terrain_source: TerrainSource = TerrainSource.ir_swing,
 ) -> CellCostResponse:
     """Inspect one cell's roughness / obstacle / IR / geology breakdown."""
-    logger.info("cell: (%d,%d) rough=%s r=%s obst_r=%s", row, col,
-                _method_str(roughness_method), roughness_radius, obstacle_radius)
+    logger.info("cell: (%d,%d) rough=%s r=%s obst_r=%s terrain=%s", row, col,
+                _method_str(roughness_method), roughness_radius, obstacle_radius,
+                _method_str(terrain_source))
     maps = get_maps()
     if not (0 <= row < maps.height and 0 <= col < maps.width):
         logger.warning("cell: (%d,%d) outside %dx%d", row, col, maps.height, maps.width)
@@ -764,9 +854,10 @@ def get_cell(
         )
         ir = float(np.clip(maps.day_ir[row, col] - maps.night_ir[row, col], -1.0, 1.0))
         code = int(maps.geo[row, col])
+        geo_cost = float(R.get_terrain_type_geological_based_cost(maps, (row, col)))
     except (TypeError, ValueError, IndexError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    blob = f"{row},{col},{_method_str(roughness_method)},{roughness_radius},{obstacle_radius},{residual_threshold_m}"
+    blob = f"{row},{col},{_method_str(roughness_method)},{roughness_radius},{obstacle_radius},{residual_threshold_m},{_method_str(terrain_source)}"
     return CellCostResponse(
         row=row, col=col, valid=True,
         elevation_m=float(maps.elevation[row, col]),
@@ -774,7 +865,8 @@ def get_cell(
         obstacle_density=float(dens),
         roughness_cost=float(R.terrain_roughnes_penalty_func(float(rough_m))),
         obstacle_cost=float(R.obstacle_density_penalty_func(float(dens))),
-        geology_cost=float(R.terrain_type_geological_based_dict.get(code, R.DEFAULT_GEOLOGY_PENALTY)),
+        geology_cost=geo_cost,
+        geology_unit=R.GEOLOGY_UNIT_NAMES.get(code, f"{code} - Unknown unit"),
         terrain_ir_cost=float(R.terrain_type_IR_based_penalty_func(ir)),
         thermal_cost=float(R.thermal_swing_risk_penalty_func(abs(ir))),
         config_hash=hashlib.sha256(blob.encode()).hexdigest()[:16],
@@ -993,6 +1085,60 @@ def map_tile(request: Request, layer: str, z: int, x: int, y: int) -> Response:
         raise HTTPException(status_code=422, detail="empty tile")
     png = _render_tile_png(key, tile)
     return Response(content=png, media_type="image/png")
+
+
+@app.get("/maps/geology/vector.geojson")
+@limiter.limit(RATE_LIMIT)
+def geology_vector(
+    request: Request,
+    simplified: bool = Query(default=True),
+    code: Optional[int] = Query(default=None, ge=1, le=14),
+    minx: Optional[float] = Query(default=None),
+    miny: Optional[float] = Query(default=None),
+    maxx: Optional[float] = Query(default=None),
+    maxy: Optional[float] = Query(default=None),
+    limit: Optional[int] = Query(default=None, ge=1, le=R.GEOLOGY_VECTOR_MAX_FEATURES),
+) -> Dict[str, object]:
+    """Aggregated GeoUnits_v1 vector map as GeoJSON (MTM metres, NOT lon/lat).
+
+    Serves ``aligned/GeoUnits_vector_MTM100m[_simplified].geojson``: all 1304
+    unit polygons with every native GDB column plus ``_layer``/``_code``.
+    Defaults to the 25 m-simplified variant (~3.4 MB); ``simplified=false``
+    serves full resolution (~70 MB). Filter by unit ``code`` 1..14 and/or a
+    ``minx/miny/maxx/maxy`` viewport window (MTM metres) to shrink payloads.
+    The frontend plots these coordinates directly on the MTM grid tiles.
+    """
+    started = time.perf_counter()
+    bbox = None
+    if (minx, miny, maxx, maxy) != (None, None, None, None):
+        if None in (minx, miny, maxx, maxy):
+            raise HTTPException(status_code=422, detail="bbox needs all of minx, miny, maxx, maxy")
+        bbox = (minx, miny, maxx, maxy)
+    logger.info("geology_vector: simplified=%s code=%s bbox=%s limit=%s", simplified, code, bbox, limit)
+    try:
+        geojson = R.load_geology_vector_geojson(
+            simplified=bool(simplified), code=code, bbox=bbox, limit=limit,
+        )
+    except (TypeError, ValueError) as exc:
+        logger.warning("geology_vector: invalid parameters: %s", exc)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        logger.error("geology_vector: missing file: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    logger.info("geology_vector: %d features in %.2fs", len(geojson["features"]), time.perf_counter() - started)
+    return geojson
+
+
+@app.get("/maps/geology/vector/info", response_model=Dict[str, object])
+@limiter.limit(RATE_LIMIT)
+def geology_vector_info(request: Request) -> Dict[str, object]:
+    """Export sidecar: CRS, bounds, per-symbol counts/areas (map legend data)."""
+    try:
+        return R.load_geology_vector_stats()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"cannot parse stats: {exc}") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover - manual serve helper

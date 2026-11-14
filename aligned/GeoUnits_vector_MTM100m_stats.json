@@ -1,0 +1,101 @@
+{
+  "layer": "GeoUnits_v1",
+  "source": "sim3464_database\\database\\Geodatabase\\Nili.gdb",
+  "files": {
+    "full": "GeoUnits_vector_MTM100m.geojson",
+    "simplified": "GeoUnits_vector_MTM100m_simplified.geojson",
+    "simplify_tol_m": 25.0
+  },
+  "reference_grid": {
+    "raster": "THEMIS_Day_MTM100m.tif",
+    "crs": "PROJCS[\"MTM_clon77_5E\",GEOGCS[\"GCS_Mars_2000_Sphere\",DATUM[\"Mars_2000_(Sphere)\",SPHEROID[\"Mars_2000_Sphere\",3396190,0]],PRIMEM[\"Reference_Meridian\",0],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0],PARAMETER[\"central_meridian\",77.5],PARAMETER[\"scale_factor\",1],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH]]"
+  },
+  "crs": "PROJCS[\"MTM_clon77.5E\",GEOGCS[\"Mars_2000_(Sphere)\",DATUM[\"Mars_2000_(Sphere)\",SPHEROID[\"Mars_2000_(Sphere)\",3396190,0],AUTHORITY[\"ESRI\",\"106971\"]],PRIMEM[\"Reference_Meridian\",0],UNIT[\"Degree\",0.0174532925199433]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0],PARAMETER[\"central_meridian\",77.5],PARAMETER[\"scale_factor\",1],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"Meter\",1],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH]]",
+  "features": 1304,
+  "invalid_before": 2,
+  "bounds_mtm": [
+    -39529.35594832897,
+    1049162.1464110818,
+    16941.189408898354,
+    1108513.8211999964
+  ],
+  "columns": [
+    "unit",
+    "name",
+    "symbol_noSub",
+    "subscript",
+    "symbol",
+    "ORIG_FID",
+    "SHAPE_Length",
+    "SHAPE_Area",
+    "Color_ID",
+    "geometry",
+    "_layer",
+    "_code"
+  ],
+  "symbols": [
+    "Aeb",
+    "Hnpf",
+    "NHjf1",
+    "NHjf2",
+    "Njf",
+    "Nle",
+    "Nnp1",
+    "Nnp2",
+    "Nrb",
+    "Nue",
+    "ce",
+    "ci",
+    "cr",
+    "su"
+  ],
+  "codes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14
+  ],
+  "count_by_symbol": {
+    "Aeb": 475,
+    "Nue": 269,
+    "Nnp1": 156,
+    "Nnp2": 128,
+    "Nrb": 70,
+    "cr": 64,
+    "su": 53,
+    "Nle": 20,
+    "ce": 15,
+    "NHjf2": 15,
+    "Njf": 13,
+    "ci": 9,
+    "NHjf1": 9,
+    "Hnpf": 8
+  },
+  "area_km2_by_symbol": {
+    "Aeb": 311.69,
+    "Hnpf": 24.63,
+    "NHjf1": 12.74,
+    "NHjf2": 27.09,
+    "Njf": 345.92,
+    "Nle": 175.7,
+    "Nnp1": 808.4,
+    "Nnp2": 77.69,
+    "Nrb": 62.37,
+    "Nue": 955.18,
+    "ce": 159.82,
+    "ci": 3.08,
+    "cr": 181.55,
+    "su": 191.94
+  },
+  "note": "cr keeps both source name variants ('Crater rim unit' + 'Crater riim unit' typo); polygon borders ARE the unit contacts (GeoContacts is a separate line layer, not merged)."
+}
