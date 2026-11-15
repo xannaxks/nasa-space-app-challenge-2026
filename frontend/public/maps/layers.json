@@ -1,0 +1,34 @@
+{
+  "slope_max_deg": 40.0,
+  "layers": {
+    "day": {
+      "file": "THEMIS_Day_MTM100m_norm01.png",
+      "kind": "raster",
+      "mapping": "norm01"
+    },
+    "night": {
+      "file": "THEMIS_Night_MTM100m_norm01.png",
+      "kind": "raster",
+      "mapping": "norm01"
+    },
+    "dtm": {
+      "file": "DTM_CTX_mosaic_MTM100m_norm01.png",
+      "kind": "raster",
+      "mapping": "norm01"
+    },
+    "slope": {
+      "file": "DTM_slope_deg_MTM100m.png",
+      "kind": "raster",
+      "mapping": "slope40"
+    },
+    "hillshade": {
+      "file": "DTM_hillshade_MTM100m.png",
+      "kind": "raster",
+      "mapping": "raw"
+    },
+    "geology": {
+      "file": "GeoUnits_vector_MTM100m_simplified.geojson",
+      "kind": "vector"
+    }
+  }
+}

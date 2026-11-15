@@ -1,0 +1,73 @@
+:root {
+  --bg: #0b0e13;
+  --panel: #141a23;
+  --panel-2: #1b2330;
+  --text: #e8edf3;
+  --muted: #9aa7b8;
+  --accent: #4da3ff;
+  --danger: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+
+.app { display: flex; height: 100vh; width: 100vw; overflow: hidden; position: relative; }
+.map-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; }
+.map-container { position: absolute; inset: 0; }
+
+/* Dedicated non-overlapping slot for the reopen panel button:
+   docked below the MapLibre top-right nav controls. */
+.panel-reopen { position: absolute; right: 12px; top: 76px; z-index: 30; }
+
+/* Collapsed layers bar stays compact in the left-bottom corner. */
+.layers-collapsed { left: 12px; bottom: 12px; padding: 6px; }
+
+/* Keep MapLibre controls clear of our HUDs. */
+.maplibregl-ctrl-top-right { margin: 12px 12px 0 0; }
+.maplibregl-ctrl-bottom-right { margin: 0 12px 12px 0; }
+
+.hud { position: absolute; z-index: 10; background: rgba(20, 26, 35, 0.92); border: 1px solid #2a3547;
+  border-radius: 10px; padding: 10px 12px; backdrop-filter: blur(4px); pointer-events: auto; }
+
+/* Left-docked layers column: part of flex layout, never overlays the map. */
+.layers-dock { width: 300px; flex: 0 0 300px; background: var(--panel); border-right: 1px solid #2a3547;
+  display: flex; flex-direction: column; min-height: 0; }
+.layers-dock.collapsed { width: 44px; flex-basis: 44px; align-items: center; }
+.layers-dock-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2a3547; }
+.layers-dock.collapsed .layers-dock-head { flex-direction: column; border-bottom: none; padding: 10px 6px; }
+.layers-dock-body { padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.layers-dock h3, .sidebar h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.layer-row { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-top: 1px solid #263043; }
+.layer-row input[type='text'] { flex: 1; min-width: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+.inspect-card { left: 12px; top: 12px; width: 300px; max-height: 40vh; overflow: auto; }
+.inspect-card table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.inspect-card td { border-top: 1px solid #263043; padding: 3px 4px; word-break: break-word; }
+.inspect-card td:first-child { color: var(--muted); width: 40%; }
+
+.pick-banner { top: 12px; left: 50%; transform: translateX(-50%); border-color: var(--accent); }
+.dim { position: absolute; inset: 0; z-index: 20; background: rgba(5, 8, 12, 0.62);
+  display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+.dim img { max-width: 220px; }
+
+.sidebar { width: 340px; flex: 0 0 340px; background: var(--panel); border-left: 1px solid #2a3547; display: flex; flex-direction: column; }
+.sidebar.hidden { display: none; }
+.sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #2a3547; }
+.sidebar-body { padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+
+button { background: var(--panel-2); color: var(--text); border: 1px solid #2f3b51; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
+button.danger { border-color: var(--danger); color: var(--danger); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+input, select, textarea { background: #0e141d; color: var(--text); border: 1px solid #2f3b51; border-radius: 8px; padding: 6px 8px; width: 100%; }
+label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.row { display: flex; gap: 6px; align-items: center; }
+.point-row { border: 1px solid #263043; border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap: 6px; }
+.small { font-size: 12px; color: var(--muted); }
+.route-legend { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.params-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+details { border: 1px solid #263043; border-radius: 8px; padding: 6px 8px; }
+summary { cursor: pointer; }
