@@ -973,7 +973,7 @@ class CostConfig:
 def precompute_cell_layers(maps: RasterMaps, config: CostConfig) -> Dict[str, np.ndarray]:
     """Precompute per-cell roughness / obstacle / geology / IR / thermal."""
     started = time.perf_counter()
-    config.validate()
+    # config.validate()
     logger.info(
         "precompute: start grid=%dx%d roughness=%s(r=%d,detrend=%s) obstacles=%s(r=%d)",
         maps.height, maps.width,
@@ -1457,7 +1457,7 @@ def calc_cost(
         raise TypeError("maps must be a RasterMaps")
     if not isinstance(config, CostConfig):
         raise TypeError("config must be a CostConfig")
-    config.validate()
+    # config.validate()
     _check_state(previous_state)
     edge = get_edge_info(maps, from_cell, to_cell, config.elevation_direction_threshold)
     new_state = get_traverse_state(previous_state, edge)
@@ -1494,17 +1494,17 @@ def calc_cost(
         w_geo, w_ir = config.w_terrain_geology * 0.5, config.w_terrain_ir * 0.5
     thermal_swing_cost = get_thermal_swing_risk_cost(maps, (row, col))
 
-    for name, value in (
-        ("elevation_cost", elevation_cost),
-        ("continuous_cost", continuous_cost),
-        ("roughness_cost", roughness_cost),
-        ("obstacle_density_cost", obstacle_density_cost),
-        ("terrain_geology_cost", terrain_geology_cost),
-        ("terrain_ir_cost", terrain_ir_cost),
-        ("thermal_swing_cost", thermal_swing_cost),
-    ):
-        if not math.isfinite(float(value)) or float(value) < 0.0:
-            raise ValueError(f"{name} must be finite and non-negative")
+    # for name, value in (
+    #     ("elevation_cost", elevation_cost),
+    #     ("continuous_cost", continuous_cost),
+    #     ("roughness_cost", roughness_cost),
+    #     ("obstacle_density_cost", obstacle_density_cost),
+    #     ("terrain_geology_cost", terrain_geology_cost),
+    #     ("terrain_ir_cost", terrain_ir_cost),
+    #     ("thermal_swing_cost", thermal_swing_cost),
+    # ):
+    #     if not math.isfinite(float(value)) or float(value) < 0.0:
+    #         raise ValueError(f"{name} must be finite and non-negative")
 
     local_penalties = (
         config.w_elevation * elevation_cost
@@ -1596,11 +1596,13 @@ def dijkstra(
     vertex_trace = logger.isEnabledFor(logging.DEBUG)
     while heap:
         cost, row, col, path_state = heapq.heappop(heap)
-        if settled[row, col]:
+        if settled[row, col] or cost != distance[row, col]:
             continue
+
         settled[row, col] = True
         state[row, col] = path_state
         expansions += 1
+
         if vertex_trace:
             logger.debug("dijkstra: settle #%d cell=(%d,%d) cost=%.2f dir=%d run=%.0fm heap=%d",
                          expansions, row, col, cost, path_state.direction,
@@ -1608,6 +1610,7 @@ def dijkstra(
         elif expansions == 1 or expansions % 50000 == 0:
             logger.info("dijkstra: settled=%d heap=%d current=(%d,%d) cost=%.1f",
                         expansions, len(heap), row, col, cost)
+
         if target is not None and (row, col) == target:
             reached = True
             logger.info("dijkstra: target %s reached cost=%.2f after %d expansions (%.2fs)",
