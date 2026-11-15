@@ -4,6 +4,5 @@ MSR_TRN_HiRISE_soc_003_USGS_release_aug2024/
 sim3464_database/
 MSR_TRN_HiRISE_soc_003_USGS_release_aug2024/
 *.xml
-terrain-map/
+node_modules/
 __pycache__/
-__pycache__
