@@ -44,6 +44,9 @@ _connections_lock = threading.Lock()
 
 
 async def connection_gate(request: Request, call_next):
+    if request.method == "OPTIONS":
+        print(" | CORS | OPTIONS receieved")
+        return await call_next(request) 
     """Cap concurrent HTTP connections; overflow gets 503 + Retry-After."""
     global _active_connections
     with _connections_lock:
@@ -457,10 +460,21 @@ app = FastAPI(
     "defaults in routing.py. Dijkstra legs are chained in waypoint order "
     "(first->second->...->last) and aggregated into one route.",
     lifespan=lifespan,
+) 
+# 1. gate first (inner)
+app.middleware("http")(connection_gate)
+
+# 2. CORS last (outer -> runs first, answers OPTIONS before gate logic)
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.middleware("http")(connection_gate)
 
 _MAPS: R.RasterMaps | None = None
 _LAYERS_CACHE: Dict[str, Dict[str, np.ndarray]] = {}

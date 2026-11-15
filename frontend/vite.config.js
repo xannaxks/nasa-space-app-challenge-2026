@@ -8,8 +8,8 @@ export default defineConfig({
     proxy: {
       // Backend is only used for route calculation now; /maps/* is served
       // locally from frontend/public/maps/ (pre-converted PNGs + GeoJSON).
-      '/route': 'http://localhost:8000',
-      '/routes': 'http://localhost:8000',
+      '/route': 'https://nasa-space-app-challenge-backend-production.up.railway.app',
+      '/routes': 'https://nasa-space-app-challenge-backend-production.up.railway.app',
     },
   },
 });

@@ -35,12 +35,13 @@ export function geounitColor(id) {
  * }
  */
 
-function rasterInspect(title, unit) {
+function rasterInspect(layerId, label, unit) {
   return async (lngLat, helpers) => {
-    const px = helpers?.lngLatToPixel?.(lngLat);
+    // NOTE: lngLatToPixel(lng, lat) takes two numbers, not an object.
+    const px = helpers?.lngLatToPixel?.(lngLat.lng, lngLat.lat);
     if (!px) return null;
-    const hit = await inspectLocalPixel(title, px).catch(() => null);
-    const rows = hit
+    const hit = await inspectLocalPixel(layerId, px).catch((e) => ({ __error: String(e?.message || e) }));
+    const rows = hit && !hit.__error
       ? [
           {
             k: `value${unit ? ` (${unit})` : ''}`,
@@ -50,60 +51,63 @@ function rasterInspect(title, unit) {
           { k: 'centre (MTM m)', v: `x=${px.mtm.x.toFixed(1)}, y=${px.mtm.y.toFixed(1)}` },
           { k: 'lng/lat', v: `${lngLat.lng.toFixed(5)}, ${lngLat.lat.toFixed(5)}` },
         ]
-      : [{ k: 'note', v: 'local PNG not loaded yet' }];
-    return { title: `${title} pixel r=${px.row} c=${px.col}`, rows, lngLat };
+      : [
+          { k: 'note', v: 'local PNG not loaded yet' },
+          { k: 'error', v: hit.__error },
+        ];
+    return { title: `${label} pixel r=${px.row} c=${px.col}`, rows, lngLat };
   };
 }
 
 export const MAP_LAYERS = [
   {
     id: 'hillshade',
-    name: 'Hillshade (DTM)',
+    name: 'Hillshade',
     kind: 'raster',
     defaultVisible: true,
     defaultOpacity: 1,
     file: 'DTM_hillshade_MTM100m.png',
-    inspect: rasterInspect('hillshade', null),
+    inspect: rasterInspect('hillshade', 'Hillshade', null),
   },
   {
     id: 'dtm',
-    name: 'DTM elevation (norm)',
+    name: 'Elevation (DTM)',
     kind: 'raster',
     defaultVisible: false,
     defaultOpacity: 1,
     file: 'DTM_CTX_mosaic_MTM100m_norm01.png',
-    inspect: rasterInspect('dtm', '0-1'),
+    inspect: rasterInspect('dtm', 'Elevation (DTM)', '0-1'),
   },
   {
     id: 'slope',
-    name: 'Slope (deg)',
+    name: 'Slope',
     kind: 'raster',
     defaultVisible: false,
     defaultOpacity: 0.85,
     file: 'DTM_slope_deg_MTM100m.png',
-    inspect: rasterInspect('slope', 'deg'),
+    inspect: rasterInspect('slope', 'Slope', 'deg'),
   },
   {
     id: 'day',
-    name: 'THEMIS Day IR',
+    name: 'Day IR',
     kind: 'raster',
     defaultVisible: false,
     defaultOpacity: 1,
     file: 'THEMIS_Day_MTM100m_norm01.png',
-    inspect: rasterInspect('day', '0-1'),
+    inspect: rasterInspect('day', 'Day IR', '0-1'),
   },
   {
     id: 'night',
-    name: 'THEMIS Night IR',
+    name: 'Night IR',
     kind: 'raster',
     defaultVisible: false,
     defaultOpacity: 1,
     file: 'THEMIS_Night_MTM100m_norm01.png',
-    inspect: rasterInspect('night', '0-1'),
+    inspect: rasterInspect('night', 'Night IR', '0-1'),
   },
   {
     id: 'geology',
-    name: 'Geology units (vector)',
+    name: 'Geology units',
     kind: 'vector',
     defaultVisible: true,
     defaultOpacity: 0.55,

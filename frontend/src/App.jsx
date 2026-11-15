@@ -5,6 +5,9 @@ import InspectCard from './components/InspectCard.jsx';
 import Sidebar, { ROUTE_COLORS } from './components/Sidebar.jsx';
 import { MAP_LAYERS } from './map/layers.js';
 import { api, ApiError } from './api/client.js';
+import { buildRoutePayload } from './routeSchema.js';
+import { mtmToLngLat } from './map/projection.js';
+import { GRID } from './map/grid.js';
 
 let uid = 1;
 const nid = (p) => `${p}-${uid++}`;
@@ -59,34 +62,10 @@ export default function App() {
     setPicking(false);
   };
 
-  const buildPayload = () => {
-    const merged = {};
-    for (const [k, v] of Object.entries(params)) {
-      if (k === '_custom' || v === '' || v == null) continue;
-      merged[k] = v;
-    }
-    if (params._custom) {
-      try {
-        Object.assign(merged, JSON.parse(params._custom));
-      } catch {
-        throw new Error('Custom JSON params are not valid JSON');
-      }
-    }
-    return {
-      params: merged,
-      points: points.map((p, i) => ({
-        name: p.name || `Point ${i + 1}`,
-        order: i + 1,
-        lng: p.lngLat?.lng,
-        lat: p.lngLat?.lat,
-        row: p.pixel?.row,
-        col: p.pixel?.col,
-      })),
-    };
-  };
+  const buildPayload = () => buildRoutePayload(points, params);
 
   // Convert backend route response -> GeoJSON line + points.
-  // Accepts several shapes: { path: [[lng,lat]..] | [{row,col}..] }, segments, waypoints.
+  // Backend v2 returns { path: [{row,col}...] (+ optional lng/lat cases below) }.
   const toGeojson = (resp, color) => {
     const lineFeatures = [];
     const pointFeatures = [];
@@ -142,7 +121,7 @@ export default function App() {
       setError(e.message);
       return;
     }
-    if (payload.points.length < 2) {
+    if (payload.waypoints.length < 2) {
       setError('Pick at least 2 waypoints.');
       return;
     }
@@ -160,7 +139,7 @@ export default function App() {
           visible: true,
           showLine: true,
           showPoints: true,
-          params: payload.params,
+          params: payload,
           summary: { length_km: resp.length_km ?? resp.length, cost: resp.cost, segments: resp.segments ?? resp.legs },
           geojson: toGeojson(resp, color),
           raw: resp,
@@ -183,7 +162,7 @@ export default function App() {
             visible: true,
             showLine: true,
             showPoints: true,
-            params: payload.params,
+            params: payload,
             summary: { length_km: null, cost: null, segments: null },
             geojson: toGeojson({ path: coords }, color),
             raw: null,
@@ -211,9 +190,9 @@ export default function App() {
         {picking && <div className="hud pick-banner">Click on the topmost map layer to place a point…</div>}
         {calculating && (
           <div className="dim">
-            <h2>Calculating route, please wait…</h2>
-            <img src="/loading.gif" alt="loading" onError={(e) => (e.target.style.display = 'none')} />
-            <div className="small">Put your custom loading gif at frontend/public/loading.gif</div>
+            <h2>Doing complex route cost calculations… Please wait… </h2>
+            <img src="https://i.pinimg.com/originals/94/d4/59/94d4590d97a6a882cf33f9e1e4fe513d.png?nii=t" alt="loading" onError={(e) => (e.target.style.display = 'none')} />
+            <div className="small">It might take up to few minutes… (blame CPython) </div>
           </div>
         )}
         {fatal && (
@@ -250,11 +229,41 @@ export default function App() {
 
 function normalizeCoords(path) {
   if (!Array.isArray(path)) return [];
+  // Backend v2: path = [{row, col}] raster cells (+ optionally lng/lat or x/y MTM metres).
   return path
     .map((p) => {
-      if (Array.isArray(p) && p.length >= 2) return [Number(p[0]), Number(p[1])];
-      if (p && typeof p === 'object' && p.lng != null && p.lat != null) return [Number(p.lng), Number(p.lat)];
+      if (Array.isArray(p) && p.length >= 2) {
+        const [a, b] = p.map(Number);
+        // [row, col] ints inside grid => raster cell; else assume [lng, lat].
+        if (Number.isInteger(a) && Number.isInteger(b) && isGridCell(a, b)) {
+          const { lng, lat } = mtmToLngLat(...Object.values(pixelToMtmApprox(a, b)));
+          return [lng, lat];
+        }
+        return [a, b];
+      }
+      if (p && typeof p === 'object') {
+        if (p.lng != null && p.lat != null) return [Number(p.lng), Number(p.lat)];
+        if (p.lon != null && p.lat != null) return [Number(p.lon), Number(p.lat)];
+        if (Number.isInteger(p.row) && Number.isInteger(p.col)) {
+          const { lng, lat } = mtmToLngLat(...Object.values(pixelToMtmApprox(p.row, p.col)));
+          return [lng, lat];
+        }
+        if (p.x != null && p.y != null) {
+          const { lng, lat } = mtmToLngLat(Number(p.x), Number(p.y));
+          return [lng, lat];
+        }
+      }
       return null;
     })
     .filter(Boolean);
+}
+
+// Local grid import without a hard dependency cycle (GRID math only).
+
+function pixelToMtmApprox(row, col) {
+  return { x: GRID.originX + (col + 0.5) * GRID.resM, y: GRID.originY - (row + 0.5) * GRID.resM };
+}
+
+function isGridCell(row, col) {
+  return row >= 0 && row < GRID.height && col >= 0 && col < GRID.width;
 }

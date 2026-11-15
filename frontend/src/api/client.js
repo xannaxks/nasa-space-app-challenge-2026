@@ -14,7 +14,17 @@ export class ApiError extends Error {
 }
 
 async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const url = `${API_BASE}${path}`;
+  const method = options.method || 'GET';
+  let parsedBody;
+  try {
+    parsedBody = options.body ? JSON.parse(options.body) : undefined;
+  } catch {
+    parsedBody = options.body;
+  }
+  // Log every backend request before sending (method + url + parsed JSON body).
+  console.log(`[api] ${method} ${url}`, parsedBody !== undefined ? parsedBody : '');
+  const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
@@ -25,6 +35,8 @@ async function request(path, options = {}) {
   } catch {
     data = text;
   }
+  // Log the response (status + parsed body) for debugging.
+  console.log(`[api] <- ${res.status} ${method} ${url}`, data);
   if (!res.ok) {
     throw new ApiError(
       (data && data.detail) || `Request failed: ${res.status}`,

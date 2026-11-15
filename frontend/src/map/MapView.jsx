@@ -83,12 +83,13 @@ export default function MapView({ layerStates, routes, picking, onInspect, onPic
         try {
           const info = await def.inspect(e.lngLat, { lngLatToPixel });
           cbRef.current.onInspect?.(info ? { ...info, lngLat: e.lngLat } : null);
-        } catch {
+        } catch (e) {
           cbRef.current.onInspect?.({
             title: `Pixel r=${px.row} c=${px.col}`,
             rows: [
               { k: 'centre (MTM m)', v: `x=${px.mtm.x.toFixed(1)}, y=${px.mtm.y.toFixed(1)}` },
               { k: 'note', v: 'local PNG not loaded yet' },
+              { k: 'error', v: String(e?.message || e) },
             ],
             lngLat: e.lngLat,
           });

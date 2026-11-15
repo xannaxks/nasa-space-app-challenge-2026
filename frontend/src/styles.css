@@ -39,7 +39,9 @@ body { background: var(--bg); color: var(--text); font-family: Inter, system-ui,
 .layers-dock-body { padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .layers-dock h3, .sidebar h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .layer-row { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-top: 1px solid #263043; }
-.layer-row input[type='text'] { flex: 1; min-width: 0; }
+.layers-panel { min-width: 300px; max-width: 340px; }
+.layer-name { flex: 1 1 auto; min-width: 90px; font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }
+.layer-row input[type='range'] { flex: 0 0 60px; width: 60px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 
 .inspect-card { left: 12px; top: 12px; width: 300px; max-height: 40vh; overflow: auto; }

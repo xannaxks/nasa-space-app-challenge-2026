@@ -1,6 +1,6 @@
 import { MAP_LAYERS } from '../map/layers.js';
 
-// Lower-left layer stack: rename, show/hide, opacity, reorder.
+// Lower-left layer stack: fixed names, show/hide, opacity, reorder.
 export default function LayersPanel({ layerStates, setLayerStates }) {
   const move = (id, dir) => {
     const sorted = [...layerStates].sort((a, b) => a.order - b.order);
@@ -34,12 +34,9 @@ export default function LayersPanel({ layerStates, setLayerStates }) {
               onChange={(e) => patch(s.id, { visible: e.target.checked })}
               title="show / hide"
             />
-            <input
-              type="text"
-              value={s.name}
-              onChange={(e) => patch(s.id, { name: e.target.value })}
-              title="layer name"
-            />
+            <span className="layer-name" title={def.name}>
+              {def.name}
+            </span>
             <input
               type="range"
               min="0"

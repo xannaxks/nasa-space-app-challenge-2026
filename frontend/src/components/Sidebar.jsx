@@ -1,14 +1,13 @@
 import { useState } from 'react';
+import {
+  DEFAULT_WEIGHTS,
+  DEFAULT_ROUGHNESS,
+  DEFAULT_OBSTACLES,
+  PENALTY_KEYS,
+  DEFAULT_MISC,
+} from '../routeSchema.js';
 
 // Right sidebar: route cost params + waypoint picking + route results.
-const DEFAULT_PARAMS = {
-  w_slope: 1.0,
-  w_roughness: 1.0,
-  w_thermal: 0.5,
-  w_geology: 0.3,
-  max_slope_deg: 25,
-};
-
 const ROUTE_COLORS = ['#ff5252', '#40c4ff', '#69f0ae', '#ffd740', '#e040fb', '#ff6e40'];
 
 export default function Sidebar({
@@ -44,6 +43,23 @@ export default function Sidebar({
     });
   };
 
+  const set = (k) => (e) => {
+    const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    setParams((p) => ({ ...p, [k]: v }));
+  };
+  const num = (k, def) => (
+    <label key={k}>
+      {k}
+      <input
+        type="number"
+        step="any"
+        placeholder={String(def)}
+        value={params[k] ?? ''}
+        onChange={(e) => setParams((p) => ({ ...p, [k]: e.target.value === '' ? '' : Number(e.target.value) }))}
+      />
+    </label>
+  );
+
   return (
     <div className={`sidebar ${open ? '' : 'hidden'}`}>
       <div className="sidebar-head">
@@ -53,29 +69,122 @@ export default function Sidebar({
       {open && (
         <div className="sidebar-body">
           <section>
-            <h3>Cost parameters</h3>
+            <h3>Weights</h3>
             <div className="params-grid">
-              {Object.entries(DEFAULT_PARAMS).map(([k, defVal]) => (
-                <label key={k}>
-                  {k}
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder={String(defVal)}
-                    value={params[k] ?? ''}
-                    onChange={(e) => setParams((p) => ({ ...p, [k]: e.target.value === '' ? '' : Number(e.target.value) }))}
-                  />
-                </label>
-              ))}
+              {Object.entries(DEFAULT_WEIGHTS).map(([k, def]) => num(k, def))}
             </div>
-            <div className="small">Empty = backend default ({Object.entries(DEFAULT_PARAMS).map(([k, v]) => `${k}=${v}`).join(', ')}).</div>
+            <div className="small">
+              Empty = backend default ({Object.entries(DEFAULT_WEIGHTS).map(([k, v]) => `${k}=${v}`).join(', ')}).
+            </div>
+          </section>
+
+          <section>
+            <h3>Terrain</h3>
+            <div className="params-grid">
+              <label>
+                terrain_source
+                <input
+                  type="text"
+                  placeholder={DEFAULT_MISC.terrain_source}
+                  value={params.terrain_source ?? ''}
+                  onChange={set('terrain_source')}
+                />
+              </label>
+              {num('elevation_direction_threshold', DEFAULT_MISC.elevation_direction_threshold)}
+            </div>
             <label>
-              Custom JSON params (merged over the above)
+              <span className="row"><input type="checkbox" style={{ width: 'auto' }} checked={params.return_path_cells ?? DEFAULT_MISC.return_path_cells} onChange={set('return_path_cells')} /> return_path_cells</span>
+            </label>
+            <div className="params-grid">
+              {num('max_path_cells', DEFAULT_MISC.max_path_cells)}
+              <label>
+                max_expansions
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="backend default"
+                  value={params.max_expansions ?? ''}
+                  onChange={(e) => setParams((p) => ({ ...p, max_expansions: e.target.value === '' ? '' : Number(e.target.value) }))}
+                />
+              </label>
+            </div>
+          </section>
+
+          <section>
+            <h3>Roughness</h3>
+            <div className="params-grid">
+              <label>
+                roughness_method
+                <input type="text" placeholder={DEFAULT_ROUGHNESS.method} value={params.roughness_method ?? ''} onChange={set('roughness_method')} />
+              </label>
+              {num('roughness_neighborhood_radius', DEFAULT_ROUGHNESS.neighborhood_radius)}
+              {num('roughness_percentile_low', DEFAULT_ROUGHNESS.percentile_low)}
+              {num('roughness_percentile_high', DEFAULT_ROUGHNESS.percentile_high)}
+              {num('roughness_slope_threshold_deg', DEFAULT_ROUGHNESS.slope_threshold_deg)}
+              {num('roughness_tri_threshold_m', DEFAULT_ROUGHNESS.tri_threshold_m)}
+            </div>
+            <label>
+              <span className="row"><input type="checkbox" style={{ width: 'auto' }} checked={params.roughness_detrend ?? DEFAULT_ROUGHNESS.detrend} onChange={(e) => setParams((p) => ({ ...p, roughness_detrend: e.target.checked }))} /> roughness_detrend</span>
+            </label>
+          </section>
+
+          <section>
+            <h3>Obstacles</h3>
+            <div className="params-grid">
+              <label>
+                obstacles_method
+                <input type="text" placeholder={DEFAULT_OBSTACLES.method} value={params.obstacles_method ?? ''} onChange={set('obstacles_method')} />
+              </label>
+              {num('obstacles_neighborhood_radius', DEFAULT_OBSTACLES.neighborhood_radius)}
+              {num('obstacles_residual_threshold_m', DEFAULT_OBSTACLES.residual_threshold_m)}
+              {num('obstacles_slope_threshold_deg', DEFAULT_OBSTACLES.slope_threshold_deg)}
+              {num('obstacles_tri_threshold_m', DEFAULT_OBSTACLES.tri_threshold_m)}
+            </div>
+            <label>
+              obstacles_multi_thresholds_m (e.g. 0, 5)
+              <input type="text" placeholder="[0]" value={params.obstacles_multi_thresholds_m ?? ''} onChange={set('obstacles_multi_thresholds_m')} />
+            </label>
+            <label>
+              <span className="row"><input type="checkbox" style={{ width: 'auto' }} checked={params.obstacles_detrend ?? DEFAULT_OBSTACLES.detrend} onChange={(e) => setParams((p) => ({ ...p, obstacles_detrend: e.target.checked }))} /> obstacles_detrend</span>
+            </label>
+          </section>
+
+          <section>
+            <h3>Penalties (expressions)</h3>
+            {PENALTY_KEYS.map((k) => (
+              <label key={k}>
+                {k}
+                <input
+                  type="text"
+                  placeholder="backend default"
+                  value={params[`penalty_${k}`] ?? ''}
+                  onChange={set(`penalty_${k}`)}
+                />
+              </label>
+            ))}
+            <label>
+              Geology penalties JSON (e.g. {'{"3": 1.2}'})
+              <textarea
+                rows={2}
+                placeholder='{"3": 1.2}'
+                value={params.geology_penalties ?? ''}
+                onChange={set('geology_penalties')}
+              />
+            </label>
+            <div className="params-grid">
+              {num('geology_default_penalty', DEFAULT_MISC.geology_default_penalty)}
+            </div>
+          </section>
+
+          <section>
+            <h3>Raw JSON override</h3>
+            <label>
+              Merged over everything above
               <textarea
                 rows={3}
-                placeholder='{"w_slope": 2.0, "penalty": "a*2"}'
+                placeholder='{"weights": {"w_thermal": 2.0}}'
                 value={params._custom ?? ''}
-                onChange={(e) => setParams((p) => ({ ...p, _custom: e.target.value }))}
+                onChange={set('_custom')}
               />
             </label>
           </section>
@@ -124,7 +233,7 @@ export default function Sidebar({
                     type="text"
                     value={r.name}
                     onChange={(e) => setRoutes((prev) => prev.map((q) => (q.id === r.id ? { ...q, name: e.target.value } : q)))}
-                                   />
+                  />
                 </div>
                 <div className="small">
                   {r.summary?.length_km != null && <>length {Number(r.summary.length_km).toFixed(2)} km · </>}
@@ -139,7 +248,7 @@ export default function Sidebar({
                 <details open={expandedRoute === r.id} onToggle={(e) => setExpandedRoute(e.target.open ? r.id : null)}>
                   <summary className="small">params & segments</summary>
                   <pre className="small" style={{ whiteSpace: 'pre-wrap' }}>
-                    {JSON.stringify({ params: r.params, segments: r.summary?.segments }, null, 2)}
+                    {JSON.stringify({ params: r.params, summary: r.summary }, null, 2)}
                   </pre>
                 </details>
               </div>
