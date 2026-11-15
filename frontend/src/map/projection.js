@@ -76,11 +76,22 @@ export function getImageCornersLngLat() {
 /**
  * Local GeoJSON may be in MTM metres (large coords) or Mars lon/lat.
  * Auto-detect: |x| > 1000 => metres, reproject every position to lng/lat.
+ * NOTE: only geometry coordinates are sampled — feature properties (cost,
+ * path_cells, etc.) can be >1000 and must not trigger a false MTM detect.
  */
 export function ensureLngLatGeojson(geojson) {
   if (!geojson || !geojson.features) return geojson;
-  const sample = JSON.stringify(geojson).slice(0, 2000);
-  const nums = [...sample.matchAll(/-?\d+\.\d+|-?\d+/g)].map((m) => Number(m[0]));
+  const nums = [];
+  for (const f of geojson.features.slice(0, 10)) {
+    if (!f.geometry) continue;
+    // Stringify GEOMETRY ONLY (not properties) and pull the first numbers.
+    const sample = JSON.stringify(f.geometry.coordinates).slice(0, 2000);
+    for (const m of sample.matchAll(/-?\d+\.\d+|-?\d+/g)) {
+      nums.push(Number(m[0]));
+      if (nums.length > 200) break;
+    }
+    if (nums.length > 200) break;
+  }
   const big = nums.some((n) => Math.abs(n) > 1000);
   if (!big) return geojson; // already lng/lat
 

@@ -65,7 +65,7 @@ export default function App() {
   const buildPayload = () => buildRoutePayload(points, params);
 
   // Convert backend route response -> GeoJSON line + points.
-  // Backend v2 returns { path: [{row,col}...] (+ optional lng/lat cases below) }.
+  // Backend v2 returns { path: [{row,col}...], legs: [{start,end,path,path_length_m,total_cost,...}] }.
   const toGeojson = (resp, color) => {
     const lineFeatures = [];
     const pointFeatures = [];
@@ -77,9 +77,10 @@ export default function App() {
           lineFeatures.push({
             type: 'Feature',
             properties: {
-              title: `Leg ${i + 1}: ${s.from || points[i]?.name || i + 1} → ${s.to || points[i + 1]?.name || i + 2}`,
-              length_km: s.length_km ?? s.length ?? '',
-              cost: s.cost ?? '',
+              title: `Leg ${i + 1}: ${s.from || cellLabel(s.start) || points[i]?.name || i + 1} → ${s.to || cellLabel(s.end) || points[i + 1]?.name || i + 2}`,
+              length_km: legKm(s),
+              cost: s.cost ?? s.total_cost ?? '',
+              cells: s.path_cells ?? '',
             },
             geometry: { type: 'LineString', coordinates: coords },
           });
@@ -90,7 +91,7 @@ export default function App() {
       if (coords.length) {
         lineFeatures.push({
           type: 'Feature',
-          properties: { title: 'Route', length_km: resp.length_km ?? '', cost: resp.cost ?? '' },
+          properties: { title: 'Route', length_km: respKm(resp), cost: resp.cost ?? resp.total_cost ?? '', cells: resp.path_cells ?? '' },
           geometry: { type: 'LineString', coordinates: coords },
         });
       }
@@ -140,7 +141,7 @@ export default function App() {
           showLine: true,
           showPoints: true,
           params: payload,
-          summary: { length_km: resp.length_km ?? resp.length, cost: resp.cost, segments: resp.segments ?? resp.legs },
+          summary: { length_km: respKm(resp), cost: resp.cost ?? resp.total_cost, segments: resp.segments ?? resp.legs },
           geojson: toGeojson(resp, color),
           raw: resp,
         },
@@ -267,3 +268,12 @@ function pixelToMtmApprox(row, col) {
 function isGridCell(row, col) {
   return row >= 0 && row < GRID.height && col >= 0 && col < GRID.width;
 }
+
+// Backend v2 field names: metres + total_cost (older code used length_km/cost).
+const toKm = (m) => (m == null || m === '' ? '' : Number(m) / 1000);
+const respKm = (resp) =>
+  resp.length_km ?? resp.length ?? toKm(resp.path_length_m);
+const legKm = (s) =>
+  s.length_km ?? s.length ?? toKm(s.path_length_m);
+const cellLabel = (c) =>
+  c && Number.isInteger(c.row) && Number.isInteger(c.col) ? `r${c.row}c${c.col}` : '';
